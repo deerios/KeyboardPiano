@@ -9,6 +9,10 @@ public class MidiAdapter : IDisposable
 {
 	private static readonly ILogger _log = Log.ForContext<MidiAdapter>();
 
+	private const int SemitonesPerOctave = 12;
+	private const int CC_Sustain         = 64;
+	private const int DefaultRetriggerVelocity = 64;
+
 	private readonly DDKeyboardInterface _keyboard;
 	private readonly MidiOut _midiOut;
 
@@ -35,13 +39,18 @@ public class MidiAdapter : IDisposable
 
 	private enum KeyState { Idle, Tracking, Active }
 
-	private readonly KeyState[] _keyState = new KeyState[127];
-	private readonly long[] _startTicks = new long[127];
-	private readonly long[] _actuationTicks = new long[127];
-	private readonly long[] _peakTicks = new long[127];
-	private readonly sbyte[] _peakDepth = new sbyte[127];
-	private readonly bool[] _noteOn = new bool[127];
-	private readonly int[] _activeNotes = new int[127];
+	private struct KeyTrackState
+	{
+		public KeyState State;
+		public long StartTicks;
+		public long ActuationTicks;
+		public long PeakTicks;
+		public sbyte PeakDepth;
+		public bool NoteOn;
+		public int ActiveNote;
+	}
+
+	private readonly KeyTrackState[] _keys = new KeyTrackState[127];
 
 	private bool _isShiftHeld;
 	private int _octOffset;
@@ -83,8 +92,8 @@ public class MidiAdapter : IDisposable
 		if (brakePedal != null)
 		{
 			(int downVal, int upVal) = brakeReverseSustain ? (0, 127) : (127, 0);
-			brakePedal.PedalDown += (_, _) => { Send(ControlChange(64, downVal)); _log.Information("Sustain: {V} (brake)", downVal); };
-			brakePedal.PedalUp   += (_, _) => { Send(ControlChange(64, upVal)); _log.Information("Sustain: {V} (brake)", upVal); };
+			brakePedal.PedalDown += (_, _) => { Send(ControlChange(CC_Sustain, downVal)); _log.Information("Sustain: {V} (brake)", downVal); };
+			brakePedal.PedalUp   += (_, _) => { Send(ControlChange(CC_Sustain, upVal)); _log.Information("Sustain: {V} (brake)", upVal); };
 		}
 
 		if (clutchPedal != null)
@@ -150,18 +159,20 @@ public class MidiAdapter : IDisposable
 	{
 		for (int i = 0; i < 127; i++)
 		{
-			if (!_noteOn[i]) continue;
-			int oldNote = _activeNotes[i];
+			ref var key = ref _keys[i];
+			if (!key.NoteOn) continue;
+
+			int oldNote = key.ActiveNote;
 			int newNote = Math.Clamp(oldNote + deltaSemitones, 0, 127);
 			Send(NoteOff(oldNote));
-			Send(NoteOn(newNote, 64));
-			_activeNotes[i] = newNote;
+			Send(NoteOn(newNote, DefaultRetriggerVelocity));
+			key.ActiveNote = newNote;
 
 			if (_activeDoubleNotes[i] != 0)
 			{
 				Send(NoteOff(_activeDoubleNotes[i]));
 				int newDouble = Math.Clamp(_activeDoubleNotes[i] + deltaSemitones, 0, 127);
-				Send(NoteOn(newDouble, 64));
+				Send(NoteOn(newDouble, DefaultRetriggerVelocity));
 				_activeDoubleNotes[i] = newDouble;
 			}
 		}
@@ -199,92 +210,95 @@ public class MidiAdapter : IDisposable
 		if (i < 0 || i >= 127) return;
 
 		long currentTicks = Stopwatch.GetTimestamp();
+		ref var key = ref _keys[i];
 
-		switch (_keyState[i])
+		switch (key.State)
 		{
-			case KeyState.Idle:
-				if (e.Height > 3 && e.PreviousHeight <= 3)
-				{
-					_startTicks[i] = currentTicks;
-					_peakTicks[i]  = currentTicks;
-					_peakDepth[i]  = e.Height;
-					_keyState[i]   = KeyState.Tracking;
-					HandleControlKey(i);
-
-					_log.Debug("Key move  key={I}  h={H}", i, e.Height);
-
-					if (e.Height >= _actuationPoint)
-					{
-						_actuationTicks[i] = currentTicks;
-						int velocity = CalculateVelocityFromTime(_samePollMs);
-						_log.Debug("Same-poll Actuation key={I}  h={H}  vel={V}", i, e.Height, velocity);
-						SendNote(i, velocity);
-						_keyState[i] = KeyState.Active;
-					}
-				}
-				break;
-
-			case KeyState.Tracking:
-				if (e.Height < _releasePoint)
-				{
-					if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
-					if (_peakDepth[i] >= _releasePoint)
-					{
-						if (_peakDepth[i] < _featherTapMinDepth)
-						{
-							_log.Debug("Feather tap suppressed (wiggle)  key={I}  peak={Peak}  minDepth={Min}", i, _peakDepth[i], _featherTapMinDepth);
-						}
-						else
-						{
-							double deltaMs = (double)(_peakTicks[i] - _startTicks[i]) / Stopwatch.Frequency * 1000.0;
-							if (deltaMs < _samePollMs) deltaMs = _samePollMs;
-							double depthFraction = (double)_peakDepth[i] / _actuationPoint;
-							double scaledDeltaMs = deltaMs / depthFraction;
-							int velocity = CalculateVelocityFromTime(scaledDeltaMs);
-							_log.Debug("Feather tap  key={I}  peak={Peak}  deltaMs={D:F1}  scaled={S:F1}  vel={V}", i, _peakDepth[i], deltaMs, scaledDeltaMs, velocity);
-							SendNote(i, velocity);
-							EndNote(i);
-						}
-						_keyState[i] = KeyState.Idle;
-					}
-					else
-					{
-						_log.Debug("Pre-Actuation release suppressed  key={I}", i);
-						_keyState[i] = KeyState.Idle;
-					}
-				}
-				else
-				{
-					if (e.Height > _peakDepth[i])
-					{
-						_peakDepth[i] = e.Height;
-						_peakTicks[i] = currentTicks;
-					}
-
-					if (e.Height >= _actuationPoint && e.PreviousHeight < _actuationPoint)
-					{
-						_actuationTicks[i] = currentTicks;
-						double deltaMs = (double)(currentTicks - _startTicks[i]) / Stopwatch.Frequency * 1000.0;
-						int velocity = CalculateVelocityFromTime(deltaMs);
-						_log.Debug("Actuation reached  key={I}  deltaMs={D:F1}  vel={V}", i, deltaMs, velocity);
-						SendNote(i, velocity);
-						_keyState[i] = KeyState.Active;
-					}
-				}
-				break;
-
-			case KeyState.Active:
-				if (e.Height < _releasePoint && e.PreviousHeight >= _releasePoint)
-				{
-					if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
-					double heldMs = (double)(currentTicks - _actuationTicks[i]) / Stopwatch.Frequency * 1000.0;
-					if (heldMs < _ghostCancelMs)
-						_log.Debug("Ghost cancel  key={I}  held={Ms:F1}ms", i, heldMs);
-					EndNote(i);
-					_keyState[i] = KeyState.Idle;
-				}
-				break;
+			case KeyState.Idle:     HandleIdle(ref key, i, e, currentTicks);    break;
+			case KeyState.Tracking: HandleTracking(ref key, i, e, currentTicks); break;
+			case KeyState.Active:   HandleActive(ref key, i, e, currentTicks);   break;
 		}
+	}
+
+	private void HandleIdle(ref KeyTrackState key, int i, KeyHeightChangedEventArgs e, long currentTicks)
+	{
+		if (e.Height <= 3 || e.PreviousHeight > 3) return;
+
+		key.StartTicks = currentTicks;
+		key.PeakTicks  = currentTicks;
+		key.PeakDepth  = e.Height;
+		key.State      = KeyState.Tracking;
+		HandleControlKey(i);
+
+		_log.Debug("Key move  key={I}  h={H}", i, e.Height);
+
+		if (e.Height >= _actuationPoint)
+		{
+			key.ActuationTicks = currentTicks;
+			int velocity = CalculateVelocityFromTime(_samePollMs);
+			_log.Debug("Same-poll Actuation key={I}  h={H}  vel={V}", i, e.Height, velocity);
+			SendNote(ref key, i, velocity);
+			key.State = KeyState.Active;
+		}
+	}
+
+	private void HandleTracking(ref KeyTrackState key, int i, KeyHeightChangedEventArgs e, long currentTicks)
+	{
+		if (e.Height < _releasePoint)
+		{
+			if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
+
+			if (key.PeakDepth < _releasePoint)
+			{
+				_log.Debug("Pre-Actuation release suppressed  key={I}", i);
+			}
+			else if (key.PeakDepth < _featherTapMinDepth)
+			{
+				_log.Debug("Feather tap suppressed (wiggle)  key={I}  peak={Peak}  minDepth={Min}", i, key.PeakDepth, _featherTapMinDepth);
+			}
+			else
+			{
+				double deltaMs = (double)(key.PeakTicks - key.StartTicks) / Stopwatch.Frequency * 1000.0;
+				if (deltaMs < _samePollMs) deltaMs = _samePollMs;
+				double depthFraction = (double)key.PeakDepth / _actuationPoint;
+				double scaledDeltaMs = deltaMs / depthFraction;
+				int velocity = CalculateVelocityFromTime(scaledDeltaMs);
+				_log.Debug("Feather tap  key={I}  peak={Peak}  deltaMs={D:F1}  scaled={S:F1}  vel={V}", i, key.PeakDepth, deltaMs, scaledDeltaMs, velocity);
+				SendNote(ref key, i, velocity);
+				EndNote(ref key, i);
+			}
+
+			key.State = KeyState.Idle;
+			return;
+		}
+
+		if (e.Height > key.PeakDepth)
+		{
+			key.PeakDepth = e.Height;
+			key.PeakTicks = currentTicks;
+		}
+
+		if (e.Height >= _actuationPoint && e.PreviousHeight < _actuationPoint)
+		{
+			key.ActuationTicks = currentTicks;
+			double deltaMs = (double)(currentTicks - key.StartTicks) / Stopwatch.Frequency * 1000.0;
+			int velocity = CalculateVelocityFromTime(deltaMs);
+			_log.Debug("Actuation reached  key={I}  deltaMs={D:F1}  vel={V}", i, deltaMs, velocity);
+			SendNote(ref key, i, velocity);
+			key.State = KeyState.Active;
+		}
+	}
+
+	private void HandleActive(ref KeyTrackState key, int i, KeyHeightChangedEventArgs e, long currentTicks)
+	{
+		if (e.Height >= _releasePoint || e.PreviousHeight < _releasePoint) return;
+
+		if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
+		double heldMs = (double)(currentTicks - key.ActuationTicks) / Stopwatch.Frequency * 1000.0;
+		if (heldMs < _ghostCancelMs)
+			_log.Debug("Ghost cancel  key={I}  held={Ms:F1}ms", i, heldMs);
+		EndNote(ref key, i);
+		key.State = KeyState.Idle;
 	}
 
 	private void OnPolled(object? sender, PolledEventArgs e)
@@ -295,7 +309,7 @@ public class MidiAdapter : IDisposable
 	private void HandleControlKey(int i)
 	{
 		if (i == _keyShiftL || i == _keyShiftR) { _isShiftHeld = true; return; }
-		if (i == _keyPedal) { Send(ControlChange(64, 127)); return; }
+		if (i == _keyPedal) { Send(ControlChange(CC_Sustain, 127)); return; }
 		if (i == _keyUp) { _keyOffset++; AllNotesOff(); _log.Debug("Key offset: {V}", _keyOffset); return; }
 		if (i == _keyDown) { _keyOffset--; AllNotesOff(); _log.Debug("Key offset: {V}", _keyOffset); return; }
 		if (i == _keyOctUp)
@@ -315,22 +329,22 @@ public class MidiAdapter : IDisposable
 		}
 	}
 
-	private void SendNote(int i, int velocity)
+	private void SendNote(ref KeyTrackState key, int i, int velocity)
 	{
 		if (i == _keySpace || i == _keyPedal) return;
 		if (!_keyMap.TryGetValue(i, out var notes)) return;
 
-		int baseNote = _isShiftHeld ? notes.Shifted : notes.Normal;
-		int finalNote = Math.Clamp(baseNote + (_octOffset * 12) + _keyOffset + _clutchTransposeOffset, 0, 127);
+		int baseNote  = _isShiftHeld ? notes.Shifted : notes.Normal;
+		int finalNote = Math.Clamp(baseNote + (_octOffset * SemitonesPerOctave) + _keyOffset + _clutchTransposeOffset, 0, 127);
 
-		if (_noteOn[i])
+		if (key.NoteOn)
 		{
-			Send(NoteOff(_activeNotes[i]));
-			_log.Debug("Note Off (retrigger cleanup)  note={Note}  key={Key}", _activeNotes[i], i);
+			Send(NoteOff(key.ActiveNote));
+			_log.Debug("Note Off (retrigger cleanup)  note={Note}  key={Key}", key.ActiveNote, i);
 		}
 
-		_activeNotes[i] = finalNote;
-		_noteOn[i]      = true;
+		key.ActiveNote = finalNote;
+		key.NoteOn     = true;
 
 		Send(NoteOn(finalNote, velocity));
 		_log.Debug("Note On   note={Note}  vel={Vel}  key={Key}  shift={Shift}", finalNote, velocity, i, _isShiftHeld);
@@ -338,7 +352,7 @@ public class MidiAdapter : IDisposable
 		if (_clutchHeld && _clutchFeature.OctaveDoubleMode is { } od)
 		{
 			int doubleNote = Math.Clamp(finalNote + od.Semitones, 0, 127);
-			int doubleVel = Math.Clamp((int)(velocity * od.VelocityScale), 1, 127);
+			int doubleVel  = Math.Clamp((int)(velocity * od.VelocityScale), 1, 127);
 			_activeDoubleNotes[i] = doubleNote;
 			Send(NoteOn(doubleNote, doubleVel));
 			_log.Debug("OctDouble On  note={Note}  vel={Vel}", doubleNote, doubleVel);
@@ -349,13 +363,13 @@ public class MidiAdapter : IDisposable
 		}
 	}
 
-	private void EndNote(int i)
+	private void EndNote(ref KeyTrackState key, int i)
 	{
 		if (i == _keySpace || i == _keyPedal) return;
-		if (!_noteOn[i]) return;
+		if (!key.NoteOn) return;
 
-		int finalNote = _activeNotes[i];
-		_noteOn[i]    = false;
+		int finalNote = key.ActiveNote;
+		key.NoteOn    = false;
 
 		Send(NoteOff(finalNote));
 		_log.Debug("Note Off  note={Note}  key={Key}", finalNote, i);
@@ -370,9 +384,19 @@ public class MidiAdapter : IDisposable
 
 	private void AllNotesOff()
 	{
-		for (int n = 0; n <= 127; n++)
-			Send(NoteOff(n));
-		Array.Clear(_activeDoubleNotes);
+		for (int i = 0; i < 127; i++)
+		{
+			ref var key = ref _keys[i];
+			if (!key.NoteOn) continue;
+			Send(NoteOff(key.ActiveNote));
+			key.NoteOn = false;
+
+			if (_activeDoubleNotes[i] != 0)
+			{
+				Send(NoteOff(_activeDoubleNotes[i]));
+				_activeDoubleNotes[i] = 0;
+			}
+		}
 	}
 
 	private void Send(int message) => _midiOut.Send(message);
