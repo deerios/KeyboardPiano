@@ -15,6 +15,7 @@ public class MidiAdapter : IDisposable
 	private int _minVelocity, _maxVelocity;
 	private double _velocityCurve, _velocityMinMs, _velocityMaxMs, _samePollMs;
 	private double _ghostCancelMs;
+	private int _featherTapMinDepth;
 	private readonly Dictionary<int, (int Normal, int Shifted)> _keyMap;
 
 	private readonly int _baseReleasePoint, _baseActuationPoint;
@@ -56,6 +57,7 @@ public class MidiAdapter : IDisposable
 		(_minVelocity, _maxVelocity)                                   = config.GetVelocityClampValues();
 		(_velocityMinMs, _velocityMaxMs, _velocityCurve, _samePollMs)  = config.GetVelocityTimingMs();
 		_ghostCancelMs                                                  = config.GetGhostCancelMs();
+		_featherTapMinDepth                                             = config.GetFeatherTapMinDepth();
 		_keyMap                                                         = config.BuildMidiKeyMap(keyboard);
 
 		(_baseReleasePoint, _baseActuationPoint) = (_releasePoint, _actuationPoint);
@@ -227,16 +229,16 @@ public class MidiAdapter : IDisposable
 					if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
 					if (_peakDepth[i] >= _releasePoint)
 					{
-						double deltaMs = (double)(_peakTicks[i] - _startTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
-						if (deltaMs < _samePollMs) deltaMs = _samePollMs;
-						double depthFraction = (double)_peakDepth[i] / _actuationPoint;
-						double scaledDeltaMs = deltaMs / depthFraction;
-						if (scaledDeltaMs < _velocityMinMs)
+						if (_peakDepth[i] < _featherTapMinDepth)
 						{
-							_log.Debug("Feather tap suppressed  key={I}  peak={Peak}  scaledMs={S:F1}", i, _peakDepth[i], scaledDeltaMs);
+							_log.Debug("Feather tap suppressed (wiggle)  key={I}  peak={Peak}  minDepth={Min}", i, _peakDepth[i], _featherTapMinDepth);
 						}
 						else
 						{
+							double deltaMs = (double)(_peakTicks[i] - _startTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
+							if (deltaMs < _samePollMs) deltaMs = _samePollMs;
+							double depthFraction = (double)_peakDepth[i] / _actuationPoint;
+							double scaledDeltaMs = deltaMs / depthFraction;
 							int velocity = CalculateVelocityFromTime(scaledDeltaMs);
 							_log.Debug("Feather tap  key={I}  peak={Peak}  deltaMs={D:F1}  scaled={S:F1}  vel={V}", i, _peakDepth[i], deltaMs, scaledDeltaMs, velocity);
 							SendNote(i, velocity);
@@ -320,6 +322,12 @@ public class MidiAdapter : IDisposable
 
 		int baseNote = _isShiftHeld ? notes.Shifted : notes.Normal;
 		int finalNote = Math.Clamp(baseNote + (_octOffset * 12) + _keyOffset + _clutchTransposeOffset, 0, 127);
+
+		if (_noteOn[i])
+		{
+			Send(NoteOff(_activeNotes[i]));
+			_log.Debug("Note Off (retrigger cleanup)  note={Note}  key={Key}", _activeNotes[i], i);
+		}
 
 		_activeNotes[i] = finalNote;
 		_noteOn[i]      = true;

@@ -41,6 +41,11 @@ public class KeyboardMidiConfig
 		return Settings.TryGetProperty("GhostCancelMs", out var prop) ? prop.GetDouble() : 30.0;
 	}
 
+	public int GetFeatherTapMinDepth()
+	{
+		return Settings.TryGetProperty("FeatherTapMinDepth", out var prop) ? prop.GetInt32() : 10;
+	}
+
 	public (string Device, string Axis, int ThresholdPct, bool Inverted, bool ReverseSustain) GetBrakePedalConfig()
 	{
 		var s = Settings;
