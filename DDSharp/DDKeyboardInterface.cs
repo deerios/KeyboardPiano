@@ -182,6 +182,7 @@ public class DDKeyboardInterface : IDisposable
 	private void PollLoopRequestResponse(CancellationToken ct)
 	{
 		_log.Information("Polling mode: request-response.");
+		_hid.FlushReadBuffer();
 		_hid.SetReadTimeout(200);
 
 		var packets = new byte[3][];
