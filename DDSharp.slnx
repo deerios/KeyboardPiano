@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DDSharp/DDSharp.csproj" />
+  <Project Path="KeyboardPiano/KeyboardPiano.csproj" />
+</Solution>
