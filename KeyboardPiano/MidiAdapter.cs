@@ -231,10 +231,17 @@ public class MidiAdapter : IDisposable
 						if (deltaMs < _samePollMs) deltaMs = _samePollMs;
 						double depthFraction = (double)_peakDepth[i] / _actuationPoint;
 						double scaledDeltaMs = deltaMs / depthFraction;
-						int velocity = CalculateVelocityFromTime(scaledDeltaMs);
-						_log.Debug("Feather tap  key={I}  peak={Peak}  deltaMs={D:F1}  scaled={S:F1}  vel={V}", i, _peakDepth[i], deltaMs, scaledDeltaMs, velocity);
-						SendNote(i, velocity);
-						EndNote(i);
+						if (scaledDeltaMs < _velocityMinMs)
+						{
+							_log.Debug("Feather tap suppressed  key={I}  peak={Peak}  scaledMs={S:F1}", i, _peakDepth[i], scaledDeltaMs);
+						}
+						else
+						{
+							int velocity = CalculateVelocityFromTime(scaledDeltaMs);
+							_log.Debug("Feather tap  key={I}  peak={Peak}  deltaMs={D:F1}  scaled={S:F1}  vel={V}", i, _peakDepth[i], deltaMs, scaledDeltaMs, velocity);
+							SendNote(i, velocity);
+							EndNote(i);
+						}
 						_keyState[i] = KeyState.Idle;
 					}
 					else
