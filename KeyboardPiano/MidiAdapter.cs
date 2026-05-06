@@ -1,6 +1,7 @@
 using DDSharp;
 using NAudio.Midi;
 using Serilog;
+using System.Diagnostics;
 
 namespace KeyboardPiano;
 
@@ -197,7 +198,7 @@ public class MidiAdapter : IDisposable
 		int i = e.Index;
 		if (i < 0 || i >= 127) return;
 
-		long currentTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+		long currentTicks = Stopwatch.GetTimestamp();
 
 		switch (_keyState[i])
 		{
@@ -235,7 +236,7 @@ public class MidiAdapter : IDisposable
 						}
 						else
 						{
-							double deltaMs = (double)(_peakTicks[i] - _startTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
+							double deltaMs = (double)(_peakTicks[i] - _startTicks[i]) / Stopwatch.Frequency * 1000.0;
 							if (deltaMs < _samePollMs) deltaMs = _samePollMs;
 							double depthFraction = (double)_peakDepth[i] / _actuationPoint;
 							double scaledDeltaMs = deltaMs / depthFraction;
@@ -263,7 +264,7 @@ public class MidiAdapter : IDisposable
 					if (e.Height >= _actuationPoint && e.PreviousHeight < _actuationPoint)
 					{
 						_actuationTicks[i] = currentTicks;
-						double deltaMs = (double)(currentTicks - _startTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
+						double deltaMs = (double)(currentTicks - _startTicks[i]) / Stopwatch.Frequency * 1000.0;
 						int velocity = CalculateVelocityFromTime(deltaMs);
 						_log.Debug("Actuation reached  key={I}  deltaMs={D:F1}  vel={V}", i, deltaMs, velocity);
 						SendNote(i, velocity);
@@ -276,7 +277,7 @@ public class MidiAdapter : IDisposable
 				if (e.Height < _releasePoint && e.PreviousHeight >= _releasePoint)
 				{
 					if (i == _keyShiftL || i == _keyShiftR) _isShiftHeld = false;
-					double heldMs = (double)(currentTicks - _actuationTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
+					double heldMs = (double)(currentTicks - _actuationTicks[i]) / Stopwatch.Frequency * 1000.0;
 					if (heldMs < _ghostCancelMs)
 						_log.Debug("Ghost cancel  key={I}  held={Ms:F1}ms", i, heldMs);
 					EndNote(i);
