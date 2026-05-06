@@ -23,6 +23,7 @@ Console.ReadLine();
 
 using var keyboard = new DDKeyboardInterface();
 keyboard.SetMaxSensitivity();
+await Task.Delay(500, cts.Token);
 
 var config = new KeyboardMidiConfig();
 
