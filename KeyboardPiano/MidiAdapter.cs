@@ -279,8 +279,7 @@ public class MidiAdapter : IDisposable
 					double heldMs = (double)(currentTicks - _actuationTicks[i]) / System.Diagnostics.Stopwatch.Frequency * 1000.0;
 					if (heldMs < _ghostCancelMs)
 						_log.Debug("Ghost cancel  key={I}  held={Ms:F1}ms", i, heldMs);
-					else
-						EndNote(i);
+					EndNote(i);
 					_keyState[i] = KeyState.Idle;
 				}
 				break;
