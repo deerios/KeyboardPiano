@@ -120,6 +120,13 @@ public class KeyboardMidiConfig
 		return map;
 	}
 
+	// MIDI destination. Empty or "virtual" = create our own virtual source port (default),
+	// which other apps (synths, browsers/Web MIDI, DAWs) see as a MIDI input to connect to.
+	// Any other value = substring of an existing output port to send to directly (e.g.
+	// "FLUID Synth"). Overridden by a command-line argument or the DDMIDI_PORT env var.
+	public string GetMidiPortName() =>
+		Settings.TryGetProperty("MidiPort", out var p) ? p.GetString() ?? "" : "";
+
 	private JsonElement Settings => _doc.RootElement.GetProperty("Settings");
 
 	private double D(string name, double def) =>

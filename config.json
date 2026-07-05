@@ -21,7 +21,8 @@
         "OctUp": "ArrowUp",
         "OctDown": "ArrowDown",
         "KeyUp": "ArrowRight",
-        "KeyDown": "ArrowLeft"
+        "KeyDown": "ArrowLeft",
+        "MidiPort": ""
     },
     "Keymap": {
         "1": 36,
