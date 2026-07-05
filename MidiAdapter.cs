@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using DrunkDeer.Protocol;
-using NAudio.Midi;
 using Serilog;
 
 namespace KeyboardPiano;
@@ -13,7 +12,7 @@ public class MidiAdapter : IDisposable
 	private const int KeySlots = 127;
 
 	private readonly KeyboardSession _keyboard;
-	private readonly MidiOut _midiOut;
+	private readonly MidiSink _midiOut;
 
 	// All config distances are given in millimetres and converted once to the raw
 	// sensor units of the connected model (0.1 / 0.01 / 0.005 mm per unit).
@@ -103,7 +102,7 @@ public class MidiAdapter : IDisposable
 
 	private readonly KeyTrack[] _keys = new KeyTrack[KeySlots];
 
-	public MidiAdapter(KeyboardSession keyboard, KeyboardMidiConfig config, MidiOut midiOut)
+	public MidiAdapter(KeyboardSession keyboard, KeyboardMidiConfig config, MidiSink midiOut)
 	{
 		_keyboard = keyboard;
 		_midiOut  = midiOut;
