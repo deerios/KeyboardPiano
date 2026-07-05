@@ -3,6 +3,31 @@ using System.Text.Json;
 
 namespace KeyboardPiano;
 
+/// <summary>
+/// All tunables for the piano engine. Distances are in millimetres of key travel
+/// (converted to raw sensor units per the connected model's precision mode),
+/// speeds in mm/s, times in milliseconds.
+/// </summary>
+public sealed record PianoSettings(
+	int MinVelocity,
+	int MaxVelocity,
+	double VelocityGamma,
+	double SlowestMmPerSec,
+	double FastestMmPerSec,
+	bool SendReleaseVelocity,
+	double FastReleaseMmPerSec,
+	double DeadzoneMm,
+	double ReleasePointMm,
+	double ActuationPointMm,
+	double VelocityMeasureStartMm,
+	double ReleaseLiftMm,
+	double RetriggerPressMm,
+	double JitterMm,
+	double CooldownMs,
+	double ActuationWindowMs,
+	double MinNoteMs,
+	double StallGapMs);
+
 public class KeyboardMidiConfig
 {
 	private readonly JsonDocument _doc;
@@ -12,48 +37,25 @@ public class KeyboardMidiConfig
 		_doc = JsonDocument.Parse(File.ReadAllText(path));
 	}
 
-	public (int Min, int Max) GetVelocityClampValues()
-	{
-		var s = Settings;
-		return (s.GetProperty("MinVelocity").GetInt32(),
-				s.GetProperty("MaxVelocity").GetInt32());
-	}
-
-	public (double MinMs, double MaxMs, double Curve) GetVelocityTimingMs()
-	{
-		var s = Settings;
-		double min = s.TryGetProperty("VelocityMinMs", out var a) ? a.GetDouble() : 5.0;
-		double max = s.TryGetProperty("VelocityMaxMs", out var b) ? b.GetDouble() : 80.0;
-		double curve = s.TryGetProperty("VelocityCurve", out var c) ? c.GetDouble() : 3.5;
-		return (min, max, curve);
-	}
-
-	public (int ReleasePoint, int ActuationPoint) GetThresholds()
-	{
-		var s = Settings;
-		return (s.GetProperty("ReleasePoint").GetInt32(),
-				s.GetProperty("ActuationPoint").GetInt32());
-	}
-
-	public double GetCooldownMs()
-	{
-		return Settings.TryGetProperty("CooldownMs", out var prop) ? prop.GetDouble() : 60.0;
-	}
-
-	public double GetActuationWindowMs()
-	{
-		return Settings.TryGetProperty("ActuationWindowMs", out var prop) ? prop.GetDouble() : 8.0;
-	}
-
-	public double GetDepthFactor()
-	{
-		return Settings.TryGetProperty("DepthFactor", out var prop) ? prop.GetDouble() : 0.04;
-	}
-
-	public double GetRateSaturation()
-	{
-		return Settings.TryGetProperty("RateSaturation", out var prop) ? prop.GetDouble() : 0.0;
-	}
+	public PianoSettings GetPianoSettings() => new(
+		MinVelocity:            I("MinVelocity", 1),
+		MaxVelocity:            I("MaxVelocity", 127),
+		VelocityGamma:          D("VelocityGamma", 1.15),
+		SlowestMmPerSec:        D("SlowestMmPerSec", 5.0),
+		FastestMmPerSec:        D("FastestMmPerSec", 400.0),
+		SendReleaseVelocity:    B("SendReleaseVelocity", true),
+		FastReleaseMmPerSec:    D("FastReleaseMmPerSec", 60.0),
+		DeadzoneMm:             D("DeadzoneMm", 0.05),
+		ReleasePointMm:         D("ReleasePointMm", 0.45),
+		ActuationPointMm:       D("ActuationPointMm", 1.10),
+		VelocityMeasureStartMm: D("VelocityMeasureStartMm", 0.40),
+		ReleaseLiftMm:          D("ReleaseLiftMm", 0.60),
+		RetriggerPressMm:       D("RetriggerPressMm", 0.30),
+		JitterMm:               D("JitterMm", 0.02),
+		CooldownMs:             D("CooldownMs", 35.0),
+		ActuationWindowMs:      D("ActuationWindowMs", 5.0),
+		MinNoteMs:              D("MinNoteMs", 45.0),
+		StallGapMs:             D("StallGapMs", 25.0));
 
 	public (string Device, string Axis, int ThresholdPct, bool Inverted, bool ReverseSustain) GetBrakePedalConfig()
 	{
@@ -119,6 +121,15 @@ public class KeyboardMidiConfig
 	}
 
 	private JsonElement Settings => _doc.RootElement.GetProperty("Settings");
+
+	private double D(string name, double def) =>
+		Settings.TryGetProperty(name, out var p) ? p.GetDouble() : def;
+
+	private int I(string name, int def) =>
+		Settings.TryGetProperty(name, out var p) ? p.GetInt32() : def;
+
+	private bool B(string name, bool def) =>
+		Settings.TryGetProperty(name, out var p) ? p.GetBoolean() : def;
 
 	// DDKey.D0-D9 -> "0"-"9"; DDKey.Q -> "Q"; others pass through (won't match keymap, skipped).
 	private static string DDKeyToToken(DDKey key)
